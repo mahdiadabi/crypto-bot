@@ -3,11 +3,11 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 
-from exchange import make_exchange
-from market_data import ohlcv_to_df, add_sma
-from strategy_sma_crossover import sma_crossover_signal
-from risk import risk_decision
-from paper_engine import (
+from src.exchange import make_exchange
+from src.market_data import ohlcv_to_df, add_sma
+from src.strategy_sma_crossover import sma_crossover_signal
+from src.risk import risk_decision
+from src.paper_engine import (
     PaperState,
     equity,
     unrealized_pnl,
@@ -15,7 +15,7 @@ from paper_engine import (
     close_long,
     check_exits,
 )
-from persistence import ensure_data_dir, load_state, save_state, append_trade
+from src.persistence import ensure_data_dir, load_state, save_state, append_trade
 
 
 def load_config() -> dict:
