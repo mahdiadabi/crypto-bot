@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 
-from paper_engine import PaperState
+from src.paper_engine import PaperState
 
 
 def _utc_now_iso() -> str:

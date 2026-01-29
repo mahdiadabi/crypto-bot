@@ -19,7 +19,7 @@ from src.persistence import ensure_data_dir, load_state, save_state, append_trad
 
 
 def load_config() -> dict:
-    config_path = Path(__file__).resolve().parent.parent / "config.json"
+    config_path = Path(__file__).resolve().parent / "config.json"
     if not config_path.exists():
         raise FileNotFoundError(
             "Missing config.json. Copy config.example.json to config.json and edit it."
