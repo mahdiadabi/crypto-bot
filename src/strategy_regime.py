@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+import pandas as pd
+
+
+@dataclass(frozen=True)
+class Signal:
+    action: str  # "BUY" | "SELL" | "HOLD"
+    reason: str
+    risk_profile: Optional[str] = None  # e.g. "trend" | "range"
+
+
+def regime_signal(
+    df: pd.DataFrame,
+    *,
+    rsi_period: int,
+    atr_period: int,
+    cfg: dict,
+    in_position: bool,
+    position_profile: str | None,
+    range_entries_today: int = 0,
+) -> Signal:
+    """
+    Long-only regime strategy:
+      - Trend: ADX high + EMA rising + breakout (Donchian) -> BUY (profile="trend")
+      - Range: ADX low + oversold (BB lower + RSI) + far from VWAP -> BUY (profile="range")
+      - Range exits on mean-reversion to VWAP -> SELL
+
+    Note: stops/trailing are handled in the risk layer / paper engine.
+    """
+    if df is None or len(df) < 2:
+        return Signal("HOLD", "not enough candles")
+
+    adx_period = int(cfg.get("adx_period", 14))
+    ema_period = int(cfg.get("ema_period", 200))
+    donchian_lookback = int(cfg.get("donchian_lookback", 96))
+    bb_period = int(cfg.get("bb_period", 20))
+    vwap_period = int(cfg.get("vwap_period", 96))
+
+    trend_adx_min = float(cfg.get("trend_adx_min", 20))
+    range_adx_max = float(cfg.get("range_adx_max", 18))
+    trend_require_close_above_ema = bool(cfg.get("trend_require_close_above_ema", True))
+    trend_require_ema_rising = bool(cfg.get("trend_require_ema_rising", True))
+
+    range_rsi_buy_max = float(cfg.get("range_rsi_buy_max", 30))
+    range_vwap_dist_atr_mult = float(cfg.get("range_vwap_dist_atr_mult", 1.2))
+    range_max_entries_per_utc_day = int(cfg.get("range_max_entries_per_utc_day", 1))
+
+    ema_col = f"ema_{ema_period}"
+    adx_col = f"adx_{adx_period}"
+    don_hi_col = f"donchian_high_{donchian_lookback}"
+    bb_lower_col = f"bb_lower_{bb_period}"
+    vwap_col = f"vwap_{vwap_period}"
+    rsi_col = f"rsi_{rsi_period}"
+    atr_col = f"atr_{atr_period}"
+
+    needed = [ema_col, adx_col, don_hi_col, bb_lower_col, vwap_col, rsi_col, atr_col]
+    for col in needed:
+        if col not in df.columns:
+            return Signal("HOLD", f"missing {col}")
+
+    prev = df.iloc[-2]
+    curr = df.iloc[-1]
+
+    for col in (ema_col, adx_col, don_hi_col, bb_lower_col, vwap_col, rsi_col, atr_col):
+        if pd.isna(curr[col]) or pd.isna(prev[col]):
+            return Signal("HOLD", "indicator not ready")
+
+    close = float(curr["close"])
+    adx = float(curr[adx_col])
+    ema = float(curr[ema_col])
+    ema_prev = float(prev[ema_col])
+
+    if in_position:
+        if position_profile == "range":
+            vwap = float(curr[vwap_col])
+            if close >= vwap:
+                return Signal("SELL", f"range exit: close {close:.2f} >= VWAP {vwap:.2f}")
+            return Signal("HOLD", "range hold")
+        return Signal("HOLD", "in position")
+
+    # ---- Trend regime ----
+    ema_rising = ema > ema_prev
+    trend_ok = adx >= trend_adx_min
+    if trend_require_close_above_ema:
+        trend_ok = trend_ok and close > ema
+    if trend_require_ema_rising:
+        trend_ok = trend_ok and ema_rising
+
+    if trend_ok:
+        don_hi_prev = float(prev[don_hi_col])  # use previous Donchian to avoid same-bar lookahead
+        if close > don_hi_prev:
+            return Signal(
+                "BUY",
+                f"trend breakout: close {close:.2f} > donchian_high(prev) {don_hi_prev:.2f} | ADX {adx:.1f}",
+                risk_profile="trend",
+            )
+        return Signal("HOLD", "trend regime but no breakout")
+
+    # ---- Range regime ----
+    if adx <= range_adx_max:
+        if range_max_entries_per_utc_day > 0 and range_entries_today >= range_max_entries_per_utc_day:
+            return Signal("HOLD", "range blocked: max entries reached for UTC day")
+
+        bb_lower = float(curr[bb_lower_col])
+        rsi = float(curr[rsi_col])
+        atr = float(curr[atr_col])
+        vwap = float(curr[vwap_col])
+
+        vwap_far = abs(close - vwap) >= (atr * range_vwap_dist_atr_mult)
+        if close < bb_lower and rsi <= range_rsi_buy_max and vwap_far:
+            return Signal(
+                "BUY",
+                f"range fade: close {close:.2f} < BB_lower {bb_lower:.2f} | RSI {rsi:.1f} <= {range_rsi_buy_max} | far from VWAP",
+                risk_profile="range",
+            )
+        return Signal("HOLD", "range regime but no setup")
+
+    return Signal("HOLD", "no-trade regime")
+

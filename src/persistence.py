@@ -26,6 +26,13 @@ def state_to_dict(state: PaperState) -> Dict[str, Any]:
         "stop_price": state.stop_price,
         "take_profit_price": state.take_profit_price,
         "realized_pnl": state.realized_pnl,
+        "bars_in_position": int(getattr(state, "bars_in_position", 0) or 0),
+        "highest_close_since_entry": getattr(state, "highest_close_since_entry", None),
+        "position_profile": getattr(state, "position_profile", None),
+        "equity_peak": getattr(state, "equity_peak", None),
+        "day_start_utc_date": getattr(state, "day_start_utc_date", None),
+        "day_start_equity": getattr(state, "day_start_equity", None),
+        "last_range_entry_utc_date": getattr(state, "last_range_entry_utc_date", None),
         # We persist trades separately to CSV; keep a count here for sanity (optional)
         "trades_count": len(state.trades) if state.trades is not None else 0,
         "saved_at": _utc_now_iso(),
@@ -40,6 +47,13 @@ def dict_to_state(d: Dict[str, Any]) -> PaperState:
     s.stop_price = d.get("stop_price", None)
     s.take_profit_price = d.get("take_profit_price", None)
     s.realized_pnl = float(d.get("realized_pnl", 0.0))
+    s.bars_in_position = int(d.get("bars_in_position", 0) or 0)
+    s.highest_close_since_entry = d.get("highest_close_since_entry", None)
+    s.position_profile = d.get("position_profile", None)
+    s.equity_peak = d.get("equity_peak", None)
+    s.day_start_utc_date = d.get("day_start_utc_date", None)
+    s.day_start_equity = d.get("day_start_equity", None)
+    s.last_range_entry_utc_date = d.get("last_range_entry_utc_date", None)
     # trades list lives in memory; we’ll start empty on load (CSV is the journal)
     s.trades = []
     return s

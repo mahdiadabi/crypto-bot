@@ -1,21 +1,35 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
 
 import pandas as pd
 
-from exchange import make_exchange
-from market_data import ohlcv_to_df, add_sma
-from strategy_sma_crossover import sma_crossover_signal
-from risk import risk_decision
-from paper_engine import (
-    PaperState,
-    equity,
-    unrealized_pnl,
-    open_long,
-    close_long,
-    check_exits,
+from src.exchange import make_exchange
+from src.market_data import (
+    add_rsi,
+    add_sma,
+    add_ema,
+    add_atr,
+    add_adx,
+    add_bbands,
+    add_donchian,
+    add_vwap,
+    ohlcv_to_df,
 )
+from src.paper_engine import (
+    PaperState,
+    check_exits,
+    close_long,
+    equity,
+    open_long,
+    unrealized_pnl,
+    update_trailing_stop_atr,
+    update_trailing_stop_atr_highest,
+)
+from src.risk import risk_decision
+from src.strategy_sma_crossover import sma_crossover_signal
+from src.strategy_sma_rsi import sma_crossover_with_rsi
+from src.strategy_regime import regime_signal, Signal as RegimeSignal
 
 
 def load_config() -> dict:
@@ -46,6 +60,12 @@ def timeframe_to_minutes(tf: str) -> int:
     raise ValueError(f"Unsupported timeframe '{tf}' for this backtest helper.")
 
 
+def required_warmup_bars(
+    sma_fast: int, sma_slow: int, rsi_period: int, atr_period: int, extra: int = 2
+) -> int:
+    return max(sma_fast, sma_slow, rsi_period, atr_period) + extra
+
+
 def main():
     cfg = load_config()
 
@@ -53,9 +73,14 @@ def main():
     timeframe = cfg["timeframe"]
     sma_fast = int(cfg.get("sma_fast", 10))
     sma_slow = int(cfg.get("sma_slow", 30))
+    rsi_period = int(cfg.get("rsi_period", 14))
 
     cfg_paper = cfg.get("paper", {"starting_cash": 1000, "fee_rate": 0.0})
     cfg_risk = cfg.get("risk", {"trade_pct_equity": 0.1, "one_position_only": True})
+    atr_period = int(cfg_risk.get("atr_period", 14))
+    cfg_strategy = cfg.get("strategy", {})
+    strategy_name = str(cfg_strategy.get("name", "sma_rsi")).strip().lower()
+    cfg_regime = cfg_strategy.get("regime", {}) if isinstance(cfg_strategy, dict) else {}
 
     fee_rate = float(cfg_paper.get("fee_rate", 0.0))
     starting_cash = float(cfg_paper.get("starting_cash", 1000))
@@ -63,6 +88,29 @@ def main():
     bt_cfg = cfg.get("backtest", {"days": 30, "warmup_candles": 50})
     days = int(bt_cfg.get("days", 30))
     warmup = int(bt_cfg.get("warmup_candles", 50))
+    if strategy_name == "regime":
+        ema_period = int(cfg_regime.get("ema_period", 200))
+        adx_period = int(cfg_regime.get("adx_period", 14))
+        donchian_lookback = int(cfg_regime.get("donchian_lookback", 96))
+        bb_period = int(cfg_regime.get("bb_period", 20))
+        vwap_period = int(cfg_regime.get("vwap_period", 96))
+        required = (
+            max(
+                ema_period,
+                adx_period * 3,
+                donchian_lookback,
+                bb_period,
+                vwap_period,
+                rsi_period,
+                atr_period,
+            )
+            + 2
+        )
+        warmup = max(warmup, required)
+    else:
+        warmup = max(
+            warmup, required_warmup_bars(sma_fast, sma_slow, rsi_period, atr_period)
+        )
 
     # ---- Fetch enough candles ----
     minutes = timeframe_to_minutes(timeframe)
@@ -104,20 +152,40 @@ def main():
         if len(batch) < max_batch:
             break
 
-    if len(all_ohlcv) < (warmup + sma_slow + 5):
+    if len(all_ohlcv) < (warmup + 5):
         raise RuntimeError(
             f"Not enough candles fetched: {len(all_ohlcv)}. Try fewer days or smaller timeframe."
         )
 
     df = ohlcv_to_df(all_ohlcv)
-    df = add_sma(df, sma_fast)
-    df = add_sma(df, sma_slow)
+    if strategy_name == "regime":
+        ema_period = int(cfg_regime.get("ema_period", 200))
+        adx_period = int(cfg_regime.get("adx_period", 14))
+        donchian_lookback = int(cfg_regime.get("donchian_lookback", 96))
+        bb_period = int(cfg_regime.get("bb_period", 20))
+        bb_std = float(cfg_regime.get("bb_std", 2.0))
+        vwap_period = int(cfg_regime.get("vwap_period", 96))
 
+        df = add_ema(df, ema_period)
+        df = add_adx(df, adx_period)
+        df = add_donchian(df, donchian_lookback)
+        df = add_bbands(df, bb_period, bb_std)
+        df = add_vwap(df, vwap_period)
+        df = add_rsi(df, rsi_period)
+        df = add_atr(df, atr_period)
+    else:
+        df = add_sma(df, sma_fast)
+        df = add_sma(df, sma_slow)
+        df = add_rsi(df, rsi_period)
+        df = add_atr(df, atr_period)
     # ---- Backtest loop ----
     state = PaperState(cash=starting_cash)
     equity_curve = []
     peak_equity = starting_cash
     max_drawdown = 0.0
+    day_start_utc = None
+    day_start_equity = starting_cash
+    last_range_entry_utc = None
 
     # Start after warmup so indicators are ready
     start_idx = warmup
@@ -127,15 +195,101 @@ def main():
         window = df.iloc[: i + 1]
         ts = window.index[-1]
         price = float(window["close"].iloc[-1])
+        utc_day = ts.date().isoformat()
+        atr_col = f"atr_{atr_period}"
+        atr_val = window[atr_col].iloc[-1] if atr_col in window.columns else None
+        atr = None if atr_val is None or pd.isna(atr_val) else float(atr_val)
 
-        # 1) exits first
+        # 0) bars-in-position book-keeping
+        if state.in_position:
+            state.bars_in_position = int(getattr(state, "bars_in_position", 0) or 0) + 1
+        else:
+            state.bars_in_position = 0
+            state.highest_close_since_entry = None
+            state.position_profile = None
+
+        # 1) update trailing stop, then exits
+        trail_mult = cfg_risk.get("trail_stop_atr_mult", cfg_risk.get("stop_atr_mult"))
+        if state.in_position and state.position_profile and isinstance(cfg_risk.get("profiles", None), dict):
+            prof = cfg_risk.get("profiles", {}).get(state.position_profile, {})
+            if isinstance(prof, dict) and prof.get("trail_stop_atr_mult", None) is not None:
+                trail_mult = prof.get("trail_stop_atr_mult")
+
+        trail_use_highest = bool(cfg_risk.get("trail_use_highest_close", False)) or state.position_profile == "trend"
+        if trail_mult is not None and atr is not None and state.in_position:
+            try:
+                if trail_use_highest:
+                    update_trailing_stop_atr_highest(state, price, atr, float(trail_mult))
+                else:
+                    update_trailing_stop_atr(state, price, atr, float(trail_mult))
+            except Exception:
+                pass
+
         exit_res = check_exits(state, symbol, price, fee_rate)
         if exit_res:
             msg, trade = exit_res
             trades.append(trade)
 
         # 2) signal from strategy
-        sig = sma_crossover_signal(window, sma_fast, sma_slow)
+        if strategy_name == "regime":
+            time_stop_bars = int(cfg_regime.get("trend_time_stop_bars", 0) or 0)
+            if (
+                state.in_position
+                and state.position_profile == "trend"
+                and time_stop_bars > 0
+                and int(getattr(state, "bars_in_position", 0) or 0) >= time_stop_bars
+            ):
+                sig = RegimeSignal("SELL", f"time stop: bars_in_position >= {time_stop_bars}")
+            else:
+                entries_today = 1 if last_range_entry_utc == utc_day else 0
+                sig = regime_signal(
+                    window,
+                    rsi_period=rsi_period,
+                    atr_period=atr_period,
+                    cfg=cfg_regime,
+                    in_position=state.in_position,
+                    position_profile=state.position_profile,
+                    range_entries_today=entries_today,
+                )
+        else:
+            # sig = sma_crossover_signal(window, sma_fast, sma_slow)
+            sig = sma_crossover_with_rsi(
+                window,
+                sma_fast,
+                sma_slow,
+                rsi_period,
+                cfg["rsi_buy_min"],
+                cfg["rsi_sell_max"],
+                require_price_above_slow=bool(
+                    cfg.get("strategy", {}).get("require_price_above_slow", True)
+                ),
+                require_slow_rising=bool(
+                    cfg.get("strategy", {}).get("require_slow_rising", True)
+                ),
+                sell_requires_rsi=bool(cfg.get("strategy", {}).get("sell_requires_rsi", False)),
+            )
+
+        # 2.5) daily loss + drawdown controls (entries only)
+        eq_pre = equity(state, price)
+        if day_start_utc != utc_day:
+            day_start_utc = utc_day
+            day_start_equity = eq_pre
+        daily_ret = (eq_pre - day_start_equity) / day_start_equity if day_start_equity > 0 else 0.0
+        dd = (peak_equity - eq_pre) / peak_equity if peak_equity > 0 else 0.0
+
+        daily_loss_limit = cfg_risk.get("daily_loss_limit_pct", None)
+        dd_reduce_pct = cfg_risk.get("dd_reduce_pct", None)
+        dd_reduce_mult = float(cfg_risk.get("dd_reduce_mult", 1.0) or 1.0)
+        dd_stop_pct = cfg_risk.get("dd_stop_pct", None)
+
+        entry_blocked = False
+        size_mult = 1.0
+        if daily_loss_limit is not None and daily_ret <= -float(daily_loss_limit):
+            entry_blocked = True
+        if dd_stop_pct is not None and dd >= float(dd_stop_pct):
+            entry_blocked = True
+        elif dd_reduce_pct is not None and dd >= float(dd_reduce_pct):
+            size_mult = max(min(dd_reduce_mult, 1.0), 0.0)
 
         # 3) risk -> intent
         intent = risk_decision(
@@ -147,21 +301,31 @@ def main():
             in_position=state.in_position,
             cfg_risk=cfg_risk,
             cfg_paper=cfg_paper,
+            atr=atr,
+            risk_profile=getattr(sig, "risk_profile", None),
         )
 
         # 4) execute intent
         if intent.action == "OPEN_LONG":
-            msg, trade = open_long(
-                state=state,
-                symbol=symbol,
-                amount=float(intent.amount),
-                price=price,
-                fee_rate=fee_rate,
-                stop_price=intent.stop_price,
-                take_profit_price=intent.take_profit_price,
-                reason=f"BACKTEST: {intent.reason}",
-            )
-            trades.append(trade)
+            if not entry_blocked:
+                amount = float(intent.amount) * float(size_mult)
+                cash_cap = state.cash / (price * (1.0 + fee_rate)) if price > 0 else 0.0
+                amount = min(amount, cash_cap)
+                if amount > 0:
+                    msg, trade = open_long(
+                        state=state,
+                        symbol=symbol,
+                        amount=amount,
+                        price=price,
+                        fee_rate=fee_rate,
+                        stop_price=intent.stop_price,
+                        take_profit_price=intent.take_profit_price,
+                        reason=f"BACKTEST: {intent.reason}",
+                        position_profile=getattr(sig, "risk_profile", None),
+                    )
+                    trades.append(trade)
+                    if getattr(sig, "risk_profile", None) == "range":
+                        last_range_entry_utc = utc_day
 
         elif intent.action == "CLOSE_LONG":
             msg, trade = close_long(
@@ -174,15 +338,14 @@ def main():
             )
             trades.append(trade)
 
-        # 5) record equity curve + drawdown
-        eq = equity(state, price)
-        equity_curve.append((ts, eq))
-
-        if eq > peak_equity:
-            peak_equity = eq
-        dd = (peak_equity - eq) / peak_equity if peak_equity > 0 else 0.0
-        if dd > max_drawdown:
-            max_drawdown = dd
+        # 5) record equity curve + drawdown stats
+        eq_post = equity(state, price)
+        equity_curve.append((ts, eq_post))
+        if eq_post > peak_equity:
+            peak_equity = eq_post
+        dd_post = (peak_equity - eq_post) / peak_equity if peak_equity > 0 else 0.0
+        if dd_post > max_drawdown:
+            max_drawdown = dd_post
 
     # If still in position at end, close at last price for reporting
     if state.in_position and state.asset_qty > 0:

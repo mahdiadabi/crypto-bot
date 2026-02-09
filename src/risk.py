@@ -48,6 +48,44 @@ def calc_buy_amount_percent_equity(
     return max(amount, 0.0)
 
 
+def calc_buy_amount_risk_atr(
+    cash: float,
+    asset_qty: float,
+    price: float,
+    risk_pct_equity: float,
+    atr: float,
+    stop_atr_mult: float,
+    fee_rate: float,
+) -> float:
+    """
+    Risk-based sizing using ATR stop distance.
+    target_risk = equity * risk_pct_equity
+    stop_distance = atr * stop_atr_mult
+    amount = target_risk / stop_distance
+    Capped by available cash (incl. fees).
+    """
+    if risk_pct_equity <= 0:
+        return 0.0
+    if atr <= 0 or stop_atr_mult <= 0:
+        return 0.0
+    if price <= 0:
+        return 0.0
+
+    eq = equity(cash, asset_qty, price)
+    target_risk = eq * risk_pct_equity
+    stop_distance = atr * stop_atr_mult
+    if stop_distance <= 0:
+        return 0.0
+
+    amount = target_risk / stop_distance
+    if amount <= 0:
+        return 0.0
+
+    # Cap by cash (fees included): total_cost = amount*price*(1+fee_rate)
+    cash_cap = cash / (price * (1.0 + fee_rate)) if cash > 0 else 0.0
+    return max(min(amount, cash_cap), 0.0)
+
+
 def compute_stop_take(
     entry_price: float, stop_loss_pct: float | None, take_profit_pct: float | None
 ):
@@ -63,6 +101,56 @@ def compute_stop_take(
     return stop_price, take_profit_price
 
 
+def compute_stop_take_atr(
+    entry_price: float,
+    atr: float,
+    stop_atr_mult: float | None,
+    take_profit_mult: float | None,
+):
+    stop_price = None
+    take_profit_price = None
+
+    if atr <= 0:
+        return stop_price, take_profit_price
+
+    if stop_atr_mult is not None and stop_atr_mult > 0:
+        stop_price = entry_price - atr * stop_atr_mult
+
+    if take_profit_mult is not None and take_profit_mult > 0:
+        take_profit_price = entry_price + atr * take_profit_mult
+
+    return stop_price, take_profit_price
+
+
+def resolve_risk_profile(cfg_risk: dict, risk_profile: str | None) -> dict:
+    """
+    Backward-compatible way to support per-strategy/per-regime risk overrides.
+
+    If cfg_risk contains:
+      {
+        ...base keys...,
+        "profiles": {
+          "trend": {"stop_atr_mult": 1.8, ...},
+          "range": {"stop_atr_mult": 1.2, ...}
+        }
+      }
+    then resolve_risk_profile(cfg_risk, "trend") returns base keys with the
+    profile keys overlaid.
+    """
+    if not isinstance(cfg_risk, dict):
+        return {}
+
+    base = {k: v for k, v in cfg_risk.items() if k != "profiles"}
+    profiles = cfg_risk.get("profiles", {}) if isinstance(cfg_risk, dict) else {}
+    if risk_profile and isinstance(profiles, dict):
+        override = profiles.get(risk_profile)
+        if isinstance(override, dict):
+            merged = dict(base)
+            merged.update(override)
+            return merged
+    return base
+
+
 def risk_decision(
     symbol: str,
     signal_action: str,  # "BUY" | "SELL" | "HOLD"
@@ -72,41 +160,88 @@ def risk_decision(
     in_position: bool,
     cfg_risk: dict,
     cfg_paper: dict,
+    atr: float | None = None,
+    risk_profile: str | None = None,
 ) -> OrderIntent:
     """
     Turns a strategy signal into a risk-checked order intent.
     """
-    trade_pct = float(cfg_risk.get("trade_pct_equity", 0.0))
-    one_pos = bool(cfg_risk.get("one_position_only", True))
-    sl_pct = cfg_risk.get("stop_loss_pct", None)
-    tp_pct = cfg_risk.get("take_profit_pct", None)
+    r = resolve_risk_profile(cfg_risk, risk_profile)
+    trade_pct = float(r.get("trade_pct_equity", 0.0))
+    risk_pct = float(r.get("risk_pct_equity", 0.0) or 0.0)
+    one_pos = bool(r.get("one_position_only", True))
+    sl_pct = r.get("stop_loss_pct", None)
+    tp_pct = r.get("take_profit_pct", None)
+    stop_atr_mult = r.get("stop_atr_mult", None)
+    tp_atr_mult = r.get("tp_atr_mult", None)
+    min_atr_pct = r.get("min_atr_pct", None)
+    max_atr_pct = r.get("max_atr_pct", None)
 
     fee_rate = float(cfg_paper.get("fee_rate", 0.0))
 
     # Normalize optional values
     sl_pct = None if sl_pct is None else float(sl_pct)
     tp_pct = None if tp_pct is None else float(tp_pct)
+    stop_atr_mult = None if stop_atr_mult is None else float(stop_atr_mult)
+    tp_atr_mult = None if tp_atr_mult is None else float(tp_atr_mult)
+    if atr is not None and (atr <= 0 or atr != atr):
+        atr = None
+    min_atr_pct = None if min_atr_pct is None else float(min_atr_pct)
+    max_atr_pct = None if max_atr_pct is None else float(max_atr_pct)
 
     if signal_action == "BUY":
         if one_pos and in_position:
             return OrderIntent("NONE", "blocked: already in position", symbol)
 
-        amount = calc_buy_amount_percent_equity(
-            cash=cash,
-            asset_qty=asset_qty,
-            price=price,
-            trade_pct_equity=trade_pct,
-            fee_rate=fee_rate,
-        )
+        if atr is not None and price > 0 and (min_atr_pct is not None or max_atr_pct is not None):
+            atr_pct = atr / price
+            if min_atr_pct is not None and atr_pct < min_atr_pct:
+                return OrderIntent(
+                    "NONE", f"blocked: atr_pct {atr_pct:.4f} < min_atr_pct {min_atr_pct}", symbol
+                )
+            if max_atr_pct is not None and atr_pct > max_atr_pct:
+                return OrderIntent(
+                    "NONE", f"blocked: atr_pct {atr_pct:.4f} > max_atr_pct {max_atr_pct}", symbol
+                )
+
+        amount = 0.0
+        if (
+            risk_pct > 0
+            and atr is not None
+            and stop_atr_mult is not None
+            and stop_atr_mult > 0
+        ):
+            amount = calc_buy_amount_risk_atr(
+                cash=cash,
+                asset_qty=asset_qty,
+                price=price,
+                risk_pct_equity=risk_pct,
+                atr=atr,
+                stop_atr_mult=stop_atr_mult,
+                fee_rate=fee_rate,
+            )
+        if amount <= 0:
+            amount = calc_buy_amount_percent_equity(
+                cash=cash,
+                asset_qty=asset_qty,
+                price=price,
+                trade_pct_equity=trade_pct,
+                fee_rate=fee_rate,
+            )
 
         if amount <= 0:
             return OrderIntent("NONE", "blocked: insufficient cash", symbol)
 
-        stop_price, take_profit_price = compute_stop_take(price, sl_pct, tp_pct)
+        if atr is not None and (stop_atr_mult or tp_atr_mult):
+            stop_price, take_profit_price = compute_stop_take_atr(
+                price, atr, stop_atr_mult, tp_atr_mult
+            )
+        else:
+            stop_price, take_profit_price = compute_stop_take(price, sl_pct, tp_pct)
 
         return OrderIntent(
             action="OPEN_LONG",
-            reason=f"percent equity sizing: {trade_pct*100:.1f}%",
+            reason=f"percent equity sizing: {trade_pct*100:.1f}%" + (f" | profile={risk_profile}" if risk_profile else ""),
             symbol=symbol,
             amount=amount,
             price=price,

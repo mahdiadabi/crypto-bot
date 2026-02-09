@@ -14,6 +14,13 @@ class PaperState:
     stop_price: Optional[float] = None
     take_profit_price: Optional[float] = None
     realized_pnl: float = 0.0
+    bars_in_position: int = 0
+    highest_close_since_entry: Optional[float] = None
+    position_profile: Optional[str] = None
+    equity_peak: Optional[float] = None
+    day_start_utc_date: Optional[str] = None  # YYYY-MM-DD
+    day_start_equity: Optional[float] = None
+    last_range_entry_utc_date: Optional[str] = None  # YYYY-MM-DD
     trades: List[Dict] = None
 
     def __post_init__(self):
@@ -39,6 +46,53 @@ def _apply_fee(notional: float, fee_rate: float) -> float:
     return notional * fee_rate
 
 
+def update_trailing_stop_atr(
+    state: PaperState, price: float, atr: Optional[float], trail_mult: Optional[float]
+) -> Optional[float]:
+    """
+    Long-only trailing stop: move stop up as price increases, based on ATR.
+    Returns the updated stop price, or None if no update occurred.
+    """
+    if not state.in_position or state.asset_qty <= 0:
+        return None
+    if atr is None or trail_mult is None:
+        return None
+    if atr <= 0 or trail_mult <= 0:
+        return None
+
+    new_stop = price - atr * trail_mult
+    if state.stop_price is None or new_stop > state.stop_price:
+        state.stop_price = new_stop
+        return state.stop_price
+    return None
+
+
+def update_trailing_stop_atr_highest(
+    state: PaperState, close_price: float, atr: Optional[float], trail_mult: Optional[float]
+) -> Optional[float]:
+    """
+    Long-only trailing stop anchored to the highest close since entry.
+    stop = highest_close_since_entry - atr*trail_mult
+    """
+    if not state.in_position or state.asset_qty <= 0:
+        return None
+    if atr is None or trail_mult is None:
+        return None
+    if atr <= 0 or trail_mult <= 0:
+        return None
+
+    if state.highest_close_since_entry is None:
+        state.highest_close_since_entry = close_price
+    else:
+        state.highest_close_since_entry = max(state.highest_close_since_entry, close_price)
+
+    new_stop = state.highest_close_since_entry - atr * trail_mult
+    if state.stop_price is None or new_stop > state.stop_price:
+        state.stop_price = new_stop
+        return state.stop_price
+    return None
+
+
 def open_long(
     state: PaperState,
     symbol: str,
@@ -48,18 +102,22 @@ def open_long(
     stop_price: Optional[float],
     take_profit_price: Optional[float],
     reason: str,
-) -> str:
+    position_profile: Optional[str] = None,
+) -> tuple[str, Optional[Dict]]:
     if amount <= 0:
-        return "OPEN_LONG skipped: amount <= 0"
+        return "OPEN_LONG skipped: amount <= 0", None
     if state.in_position:
-        return "OPEN_LONG blocked: already in position"
+        return "OPEN_LONG blocked: already in position", None
 
     notional = amount * price
     fee = _apply_fee(notional, fee_rate)
     total_cost = notional + fee
 
     if total_cost > state.cash + 1e-9:
-        return f"OPEN_LONG blocked: insufficient cash (need {total_cost:.2f}, have {state.cash:.2f})"
+        return (
+            f"OPEN_LONG blocked: insufficient cash (need {total_cost:.2f}, have {state.cash:.2f})",
+            None,
+        )
 
     state.cash -= total_cost
     state.asset_qty += amount
@@ -67,6 +125,9 @@ def open_long(
     state.entry_price = price
     state.stop_price = stop_price
     state.take_profit_price = take_profit_price
+    state.bars_in_position = 0
+    state.highest_close_since_entry = price
+    state.position_profile = position_profile
 
     # state.trades.append(
     #     {
@@ -102,12 +163,12 @@ def close_long(
     price: float,
     fee_rate: float,
     reason: str,
-) -> str:
+) -> tuple[str, Optional[Dict]]:
     if not state.in_position or state.asset_qty <= 0:
-        return "CLOSE_LONG skipped: no position"
+        return "CLOSE_LONG skipped: no position", None
     amount = min(amount, state.asset_qty)
     if amount <= 0:
-        return "CLOSE_LONG skipped: amount <= 0"
+        return "CLOSE_LONG skipped: amount <= 0", None
 
     notional = amount * price
     fee = _apply_fee(notional, fee_rate)
@@ -127,6 +188,9 @@ def close_long(
         state.entry_price = None
         state.stop_price = None
         state.take_profit_price = None
+        state.bars_in_position = 0
+        state.highest_close_since_entry = None
+        state.position_profile = None
 
     state.realized_pnl += realized
 
