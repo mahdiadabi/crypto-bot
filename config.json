@@ -1,0 +1,90 @@
+{
+  "env": "paper",
+  "exchange": "toobit",
+  "symbol": "ETH/USDT",
+  "timeframe": "15m",
+  "loop_seconds": 5,
+
+  "use_api_keys": false,
+  "api_key": "",
+  "api_secret": "",
+
+  "candles_limit": 300,
+  "sma_fast": 10,
+  "sma_slow": 30,
+
+  "rsi_period": 14,
+  "rsi_buy_min": 55,
+  "rsi_sell_max": 45,
+
+  "strategy": {
+    "name": "regime",
+    "require_price_above_slow": true,
+    "require_slow_rising": true,
+    "sell_requires_rsi": false,
+
+    "regime": {
+      "adx_period": 14,
+      "ema_period": 200,
+      "donchian_lookback": 96,
+      "bb_period": 20,
+      "bb_std": 2.0,
+      "vwap_period": 96,
+
+      "trend_adx_min": 20,
+      "range_adx_max": 18,
+      "trend_require_close_above_ema": true,
+      "trend_require_ema_rising": true,
+
+      "range_rsi_buy_max": 30,
+      "range_vwap_dist_atr_mult": 1.2,
+      "range_max_entries_per_utc_day": 1,
+
+      "trend_time_stop_bars": 192
+    }
+  },
+    
+  "paper": {
+    "starting_cash": 1000,
+    "fee_rate": 0.001
+  },
+
+  "risk": {
+    "trade_pct_equity": 0.15,
+    "risk_pct_equity": 0.005,
+    "one_position_only": true,
+
+    "daily_loss_limit_pct": 0.025,
+    "dd_reduce_pct": 0.20,
+    "dd_reduce_mult": 0.5,
+    "dd_stop_pct": 0.35,
+
+    "atr_period": 14,
+    "stop_atr_mult": 2.0,
+    "tp_atr_mult": null,
+    "trail_stop_atr_mult": null,
+    "trail_use_highest_close": true,
+    "min_atr_pct": null,
+    "max_atr_pct": null,
+
+    "profiles": {
+      "trend": {
+        "stop_atr_mult": 1.8,
+        "trail_stop_atr_mult": 3.0,
+        "tp_atr_mult": null
+      },
+      "range": {
+        "stop_atr_mult": 1.2,
+        "trail_stop_atr_mult": null,
+        "tp_atr_mult": null
+      }
+    }
+  },
+
+  "backtest": {
+    "days": 30,
+    "warmup_candles": 50
+  }
+
+
+}
