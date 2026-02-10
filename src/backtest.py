@@ -80,7 +80,9 @@ def main():
     atr_period = int(cfg_risk.get("atr_period", 14))
     cfg_strategy = cfg.get("strategy", {})
     strategy_name = str(cfg_strategy.get("name", "sma_rsi")).strip().lower()
-    cfg_regime = cfg_strategy.get("regime", {}) if isinstance(cfg_strategy, dict) else {}
+    cfg_regime = (
+        cfg_strategy.get("regime", {}) if isinstance(cfg_strategy, dict) else {}
+    )
 
     fee_rate = float(cfg_paper.get("fee_rate", 0.0))
     starting_cash = float(cfg_paper.get("starting_cash", 1000))
@@ -210,16 +212,28 @@ def main():
 
         # 1) update trailing stop, then exits
         trail_mult = cfg_risk.get("trail_stop_atr_mult", cfg_risk.get("stop_atr_mult"))
-        if state.in_position and state.position_profile and isinstance(cfg_risk.get("profiles", None), dict):
+        if (
+            state.in_position
+            and state.position_profile
+            and isinstance(cfg_risk.get("profiles", None), dict)
+        ):
             prof = cfg_risk.get("profiles", {}).get(state.position_profile, {})
-            if isinstance(prof, dict) and prof.get("trail_stop_atr_mult", None) is not None:
+            if (
+                isinstance(prof, dict)
+                and prof.get("trail_stop_atr_mult", None) is not None
+            ):
                 trail_mult = prof.get("trail_stop_atr_mult")
 
-        trail_use_highest = bool(cfg_risk.get("trail_use_highest_close", False)) or state.position_profile == "trend"
+        trail_use_highest = (
+            bool(cfg_risk.get("trail_use_highest_close", False))
+            or state.position_profile == "trend"
+        )
         if trail_mult is not None and atr is not None and state.in_position:
             try:
                 if trail_use_highest:
-                    update_trailing_stop_atr_highest(state, price, atr, float(trail_mult))
+                    update_trailing_stop_atr_highest(
+                        state, price, atr, float(trail_mult)
+                    )
                 else:
                     update_trailing_stop_atr(state, price, atr, float(trail_mult))
             except Exception:
@@ -239,7 +253,9 @@ def main():
                 and time_stop_bars > 0
                 and int(getattr(state, "bars_in_position", 0) or 0) >= time_stop_bars
             ):
-                sig = RegimeSignal("SELL", f"time stop: bars_in_position >= {time_stop_bars}")
+                sig = RegimeSignal(
+                    "SELL", f"time stop: bars_in_position >= {time_stop_bars}"
+                )
             else:
                 entries_today = 1 if last_range_entry_utc == utc_day else 0
                 sig = regime_signal(
@@ -266,7 +282,9 @@ def main():
                 require_slow_rising=bool(
                     cfg.get("strategy", {}).get("require_slow_rising", True)
                 ),
-                sell_requires_rsi=bool(cfg.get("strategy", {}).get("sell_requires_rsi", False)),
+                sell_requires_rsi=bool(
+                    cfg.get("strategy", {}).get("sell_requires_rsi", False)
+                ),
             )
 
         # 2.5) daily loss + drawdown controls (entries only)
@@ -274,7 +292,11 @@ def main():
         if day_start_utc != utc_day:
             day_start_utc = utc_day
             day_start_equity = eq_pre
-        daily_ret = (eq_pre - day_start_equity) / day_start_equity if day_start_equity > 0 else 0.0
+        daily_ret = (
+            (eq_pre - day_start_equity) / day_start_equity
+            if day_start_equity > 0
+            else 0.0
+        )
         dd = (peak_equity - eq_pre) / peak_equity if peak_equity > 0 else 0.0
 
         daily_loss_limit = cfg_risk.get("daily_loss_limit_pct", None)

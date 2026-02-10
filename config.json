@@ -24,6 +24,8 @@
     "sell_requires_rsi": false,
 
     "regime": {
+      "enable_trend": false,
+      "enable_range": true,
       "adx_period": 14,
       "ema_period": 200,
       "donchian_lookback": 96,

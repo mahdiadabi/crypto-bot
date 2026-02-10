@@ -46,6 +46,9 @@ def regime_signal(
     trend_require_close_above_ema = bool(cfg.get("trend_require_close_above_ema", True))
     trend_require_ema_rising = bool(cfg.get("trend_require_ema_rising", True))
 
+    enable_trend = bool(cfg.get("enable_trend", True))
+    enable_range = bool(cfg.get("enable_range", True))
+
     # Trend exit options (default enabled to ensure the strategy can emit SELL signals in trend positions)
     trend_exit_on_close_below_ema = bool(cfg.get("trend_exit_on_close_below_ema", True))
     trend_exit_on_donchian_low_break = bool(cfg.get("trend_exit_on_donchian_low_break", False))
@@ -162,7 +165,7 @@ def regime_signal(
     if trend_require_ema_rising:
         trend_ok = trend_ok and ema_rising
 
-    if trend_ok:
+    if enable_trend and trend_ok:
         don_hi_prev = float(prev[don_hi_col])  # use previous Donchian to avoid same-bar lookahead
         if close > don_hi_prev:
             return Signal(
@@ -173,7 +176,7 @@ def regime_signal(
         return Signal("HOLD", "trend regime but no breakout")
 
     # ---- Range regime ----
-    if adx <= range_adx_max:
+    if enable_range and adx <= range_adx_max:
         if range_max_entries_per_utc_day > 0 and range_entries_today >= range_max_entries_per_utc_day:
             return Signal("HOLD", "range blocked: max entries reached for UTC day")
 

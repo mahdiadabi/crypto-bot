@@ -17,6 +17,7 @@ offline backtest runner.
     - `sma_rsi` (default/legacy): SMA crossover with RSI confirmation (`sma_fast`, `sma_slow`, `rsi_*`)
     - `regime`: trend breakout + range mean-reversion (computed locally)
   - Regime params live under `strategy.regime.*` (ADX/EMA/Donchian/BB/VWAP + thresholds)
+    - Enable/disable modules: `enable_trend`, `enable_range`
     - Trend exits (optional): `trend_exit_on_close_below_ema`, `trend_exit_on_donchian_low_break`
     - Range exits (optional): `range_exit_on_vwap`, `range_exit_vwap_buffer_atr_mult`, `range_exit_on_bb_mid`, `range_exit_on_bb_upper`, `range_rsi_sell_min`
 - Paper:
