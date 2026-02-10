@@ -205,6 +205,7 @@ def risk_decision(
                 )
 
         amount = 0.0
+        sizing_reason = None
         if (
             risk_pct > 0
             and atr is not None
@@ -220,6 +221,8 @@ def risk_decision(
                 stop_atr_mult=stop_atr_mult,
                 fee_rate=fee_rate,
             )
+            if amount > 0:
+                sizing_reason = f"risk ATR sizing: {risk_pct*100:.2f}% eq"
         if amount <= 0:
             amount = calc_buy_amount_percent_equity(
                 cash=cash,
@@ -228,6 +231,8 @@ def risk_decision(
                 trade_pct_equity=trade_pct,
                 fee_rate=fee_rate,
             )
+            if amount > 0:
+                sizing_reason = f"percent equity sizing: {trade_pct*100:.1f}%"
 
         if amount <= 0:
             return OrderIntent("NONE", "blocked: insufficient cash", symbol)
@@ -241,7 +246,7 @@ def risk_decision(
 
         return OrderIntent(
             action="OPEN_LONG",
-            reason=f"percent equity sizing: {trade_pct*100:.1f}%" + (f" | profile={risk_profile}" if risk_profile else ""),
+            reason=(sizing_reason or "sizing") + (f" | profile={risk_profile}" if risk_profile else ""),
             symbol=symbol,
             amount=amount,
             price=price,

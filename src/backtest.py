@@ -242,6 +242,9 @@ def main():
         exit_res = check_exits(state, symbol, price, fee_rate)
         if exit_res:
             msg, trade = exit_res
+            # Backtests should record the candle timestamp, not wall-clock time.
+            if isinstance(trade, dict):
+                trade["time"] = _utc(ts)
             trades.append(trade)
 
         # 2) signal from strategy
@@ -345,6 +348,8 @@ def main():
                         reason=f"BACKTEST: {intent.reason}",
                         position_profile=getattr(sig, "risk_profile", None),
                     )
+                    if isinstance(trade, dict):
+                        trade["time"] = _utc(ts)
                     trades.append(trade)
                     if getattr(sig, "risk_profile", None) == "range":
                         last_range_entry_utc = utc_day
@@ -358,6 +363,8 @@ def main():
                 fee_rate=fee_rate,
                 reason="BACKTEST: strategy SELL",
             )
+            if isinstance(trade, dict):
+                trade["time"] = _utc(ts)
             trades.append(trade)
 
         # 5) record equity curve + drawdown stats
@@ -372,6 +379,7 @@ def main():
     # If still in position at end, close at last price for reporting
     if state.in_position and state.asset_qty > 0:
         last_price = float(df["close"].iloc[-1])
+        last_ts = df.index[-1]
         msg, trade = close_long(
             state,
             symbol,
@@ -380,6 +388,8 @@ def main():
             fee_rate,
             reason="BACKTEST: end close",
         )
+        if isinstance(trade, dict):
+            trade["time"] = _utc(last_ts)
         trades.append(trade)
         eq = equity(state, last_price)
         equity_curve.append((df.index[-1], eq))

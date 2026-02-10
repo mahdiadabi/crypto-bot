@@ -46,6 +46,7 @@ python -m src.backtest
 Outputs:
 - `data/equity_curve.csv`
 - `data/backtest_trades.csv`
+Note: backtest trade timestamps use the candle time (not wall-clock time).
 
 ## Sanity check (ATR sizing/stops)
 ```
