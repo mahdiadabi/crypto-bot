@@ -262,6 +262,9 @@ def main():
                     sell_requires_rsi=bool(cfg_strategy.get("sell_requires_rsi", False)),
                 )
 
+            if sig.action in ("BUY", "SELL"):
+                log(f"{time_idx} | SIGNAL: {sig.action} | {sig.reason}")
+
             # 3.5) Risk controls (daily loss + max drawdown) for new entries
             eq_now = equity(state, price)
             if getattr(state, "equity_peak", None) is None:

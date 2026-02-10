@@ -35,9 +35,16 @@
       "range_adx_max": 18,
       "trend_require_close_above_ema": true,
       "trend_require_ema_rising": true,
+      "trend_exit_on_close_below_ema": true,
+      "trend_exit_on_donchian_low_break": false,
 
-      "range_rsi_buy_max": 30,
-      "range_vwap_dist_atr_mult": 1.2,
+      "range_rsi_buy_max": 40,
+      "range_exit_on_vwap": false,
+      "range_exit_vwap_buffer_atr_mult": 0.0,
+      "range_exit_on_bb_mid": false,
+      "range_exit_on_bb_upper": true,
+      "range_rsi_sell_min": null,
+      "range_vwap_dist_atr_mult": 1.0,
       "range_max_entries_per_utc_day": 1,
 
       "trend_time_stop_bars": 192
@@ -76,7 +83,7 @@
       "range": {
         "stop_atr_mult": 1.2,
         "trail_stop_atr_mult": null,
-        "tp_atr_mult": null
+        "tp_atr_mult": 2.0
       }
     }
   },
