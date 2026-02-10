@@ -37,7 +37,7 @@ python -m main
 ```
 Notes:
 - Signals are evaluated on the last closed candle to avoid look-ahead bias.
-- Trades and state are saved under `data/`.
+- Trades and state are saved under `data/` (`data/trades.csv` is the live paper-trading journal; backtests write `data/backtest_trades.csv`).
 
 ## Run backtest
 ```

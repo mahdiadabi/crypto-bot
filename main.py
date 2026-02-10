@@ -32,6 +32,7 @@ from src.paper_engine import (
     update_trailing_stop_atr_highest,
 )
 from src.persistence import ensure_data_dir, load_state, save_state, append_trade
+from src.persistence import ensure_trades_csv
 
 
 def load_config() -> dict:
@@ -57,6 +58,7 @@ def main():
     state_path = data_dir / "state.json"
     trades_csv = data_dir / "trades.csv"
     ensure_data_dir(data_dir)
+    ensure_trades_csv(trades_csv)
 
     ex = make_exchange(
         exchange_name=cfg["exchange"],

@@ -3,7 +3,7 @@
   "exchange": "toobit",
   "symbol": "ETH/USDT",
   "timeframe": "15m",
-  "loop_seconds": 5,
+  "loop_seconds": 60,
 
   "use_api_keys": false,
   "api_key": "",
