@@ -81,6 +81,8 @@ def main():
     cfg_strategy = cfg.get("strategy", {})
     strategy_name = str(cfg_strategy.get("name", "sma_rsi")).strip().lower()
     cfg_regime = cfg_strategy.get("regime", {}) if isinstance(cfg_strategy, dict) else {}
+    if strategy_name not in ("regime", "sma_rsi"):
+        raise ValueError(f"Unknown strategy '{strategy_name}'. Use 'regime' or 'sma_rsi'.")
 
     cfg_paper = cfg.get("paper", {"starting_cash": 1000, "fee_rate": 0.0})
     cfg_risk = cfg.get("risk", {"trade_pct_equity": 0.1, "one_position_only": True})
@@ -135,7 +137,8 @@ def main():
             f"ADX={int(cfg_regime.get('adx_period', 14))} "
             f"Donchian={int(cfg_regime.get('donchian_lookback', 96))} "
             f"BB={int(cfg_regime.get('bb_period', 20))} "
-            f"VWAP={int(cfg_regime.get('vwap_period', 96))}"
+            f"VWAP={int(cfg_regime.get('vwap_period', 96))} "
+            f"| modules: trend={bool(cfg_regime.get('enable_trend', True))} range={bool(cfg_regime.get('enable_range', True))}"
         )
     else:
         log(
@@ -198,10 +201,12 @@ def main():
             # 2) Book-keeping + trailing stop, then check exits (SL/TP)
             if state.in_position:
                 state.bars_in_position = int(getattr(state, "bars_in_position", 0) or 0) + 1
+                state.bars_since_exit = 0
             else:
                 state.bars_in_position = 0
                 state.highest_close_since_entry = None
                 state.position_profile = None
+                state.bars_since_exit = int(getattr(state, "bars_since_exit", 0) or 0) + 1
 
             trail_mult = cfg_risk.get("trail_stop_atr_mult", cfg_risk.get("stop_atr_mult", None))
             if state.in_position and state.position_profile and isinstance(cfg_risk.get("profiles", None), dict):
@@ -221,11 +226,13 @@ def main():
                     pass
 
             exit_res = check_exits(state, symbol, price, fee_rate)
+            exited_this_bar = False
             if exit_res:
                 exit_msg, exit_trade = exit_res
                 log(f"{time_idx} | EXIT: {exit_msg}")
                 append_trade(trades_csv, exit_trade)
                 state_dirty = True
+                exited_this_bar = True
 
             # 3) Strategy signal
             if strategy_name == "regime":
@@ -321,6 +328,8 @@ def main():
             if intent.action == "OPEN_LONG":
                 if entry_blocked_reason is not None:
                     exec_msg = f"OPEN_LONG blocked by risk controls: {entry_blocked_reason}"
+                elif exited_this_bar:
+                    exec_msg = "OPEN_LONG blocked: exited this candle"
                 else:
                     amount = float(intent.amount) * float(size_mult)
                     if amount <= 0:

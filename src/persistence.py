@@ -33,6 +33,8 @@ def state_to_dict(state: PaperState) -> Dict[str, Any]:
         "day_start_utc_date": getattr(state, "day_start_utc_date", None),
         "day_start_equity": getattr(state, "day_start_equity", None),
         "last_range_entry_utc_date": getattr(state, "last_range_entry_utc_date", None),
+        "last_exit_reason": getattr(state, "last_exit_reason", None),
+        "bars_since_exit": int(getattr(state, "bars_since_exit", 0) or 0),
         # We persist trades separately to CSV; keep a count here for sanity (optional)
         "trades_count": len(state.trades) if state.trades is not None else 0,
         "saved_at": _utc_now_iso(),
@@ -54,6 +56,8 @@ def dict_to_state(d: Dict[str, Any]) -> PaperState:
     s.day_start_utc_date = d.get("day_start_utc_date", None)
     s.day_start_equity = d.get("day_start_equity", None)
     s.last_range_entry_utc_date = d.get("last_range_entry_utc_date", None)
+    s.last_exit_reason = d.get("last_exit_reason", None)
+    s.bars_since_exit = int(d.get("bars_since_exit", 0) or 0)
     # trades list lives in memory; we’ll start empty on load (CSV is the journal)
     s.trades = []
     return s

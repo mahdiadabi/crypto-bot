@@ -21,6 +21,8 @@ class PaperState:
     day_start_utc_date: Optional[str] = None  # YYYY-MM-DD
     day_start_equity: Optional[float] = None
     last_range_entry_utc_date: Optional[str] = None  # YYYY-MM-DD
+    last_exit_reason: Optional[str] = None
+    bars_since_exit: int = 0
     trades: List[Dict] = None
 
     def __post_init__(self):
@@ -128,6 +130,7 @@ def open_long(
     state.bars_in_position = 0
     state.highest_close_since_entry = price
     state.position_profile = position_profile
+    state.bars_since_exit = 0
 
     # state.trades.append(
     #     {
@@ -150,6 +153,7 @@ def open_long(
         "price": price,
         "fee": fee,
         "reason": reason,
+        "position_profile": position_profile,
     }
     state.trades.append(trade)
 
@@ -166,6 +170,8 @@ def close_long(
 ) -> tuple[str, Optional[Dict]]:
     if not state.in_position or state.asset_qty <= 0:
         return "CLOSE_LONG skipped: no position", None
+
+    position_profile = state.position_profile
     amount = min(amount, state.asset_qty)
     if amount <= 0:
         return "CLOSE_LONG skipped: amount <= 0", None
@@ -191,6 +197,8 @@ def close_long(
         state.bars_in_position = 0
         state.highest_close_since_entry = None
         state.position_profile = None
+        state.last_exit_reason = reason
+        state.bars_since_exit = 0
 
     state.realized_pnl += realized
 
@@ -203,6 +211,7 @@ def close_long(
         "fee": fee,
         "reason": reason,
         "realized_pnl": realized,
+        "position_profile": position_profile,
     }
     state.trades.append(trade)
 

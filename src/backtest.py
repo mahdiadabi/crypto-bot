@@ -83,6 +83,8 @@ def main():
     cfg_regime = (
         cfg_strategy.get("regime", {}) if isinstance(cfg_strategy, dict) else {}
     )
+    if strategy_name not in ("regime", "sma_rsi"):
+        raise ValueError(f"Unknown strategy '{strategy_name}'. Use 'regime' or 'sma_rsi'.")
 
     fee_rate = float(cfg_paper.get("fee_rate", 0.0))
     starting_cash = float(cfg_paper.get("starting_cash", 1000))
@@ -205,10 +207,12 @@ def main():
         # 0) bars-in-position book-keeping
         if state.in_position:
             state.bars_in_position = int(getattr(state, "bars_in_position", 0) or 0) + 1
+            state.bars_since_exit = 0
         else:
             state.bars_in_position = 0
             state.highest_close_since_entry = None
             state.position_profile = None
+            state.bars_since_exit = int(getattr(state, "bars_since_exit", 0) or 0) + 1
 
         # 1) update trailing stop, then exits
         trail_mult = cfg_risk.get("trail_stop_atr_mult", cfg_risk.get("stop_atr_mult"))
@@ -240,12 +244,14 @@ def main():
                 pass
 
         exit_res = check_exits(state, symbol, price, fee_rate)
+        exited_this_bar = False
         if exit_res:
             msg, trade = exit_res
             # Backtests should record the candle timestamp, not wall-clock time.
             if isinstance(trade, dict):
                 trade["time"] = _utc(ts)
             trades.append(trade)
+            exited_this_bar = True
 
         # 2) signal from strategy
         if strategy_name == "regime":
@@ -332,7 +338,10 @@ def main():
 
         # 4) execute intent
         if intent.action == "OPEN_LONG":
-            if not entry_blocked:
+            # Prevent immediate re-entry on the same candle after an exit (common churn pattern).
+            if exited_this_bar:
+                pass
+            elif not entry_blocked:
                 amount = float(intent.amount) * float(size_mult)
                 cash_cap = state.cash / (price * (1.0 + fee_rate)) if price > 0 else 0.0
                 amount = min(amount, cash_cap)
@@ -408,13 +417,85 @@ def main():
 
     print("\n=== BACKTEST SUMMARY ===")
     print(f"Symbol: {symbol} | Timeframe: {timeframe} | Days: {days}")
-    print(f"Fast SMA: {sma_fast} | Slow SMA: {sma_slow}")
+    print(f"Strategy: {strategy_name}")
+    if strategy_name == "regime":
+        print(
+            "Regime: "
+            f"trend={'on' if bool(cfg_regime.get('enable_trend', True)) else 'off'} "
+            f"range={'on' if bool(cfg_regime.get('enable_range', True)) else 'off'} | "
+            f"ADX(trend>={float(cfg_regime.get('trend_adx_min', 20)):.1f}, range<={float(cfg_regime.get('range_adx_max', 18)):.1f})"
+        )
+        print(
+            "Range exits: "
+            f"vwap={bool(cfg_regime.get('range_exit_on_vwap', True))} "
+            f"bb_mid={bool(cfg_regime.get('range_exit_on_bb_mid', False))} "
+            f"bb_upper={bool(cfg_regime.get('range_exit_on_bb_upper', False))} "
+            f"rsi_sell_min={cfg_regime.get('range_rsi_sell_min', None)}"
+        )
+    else:
+        print(f"SMA: fast={sma_fast} slow={sma_slow} | RSI={rsi_period}")
+
+    profiles = cfg_risk.get("profiles", {}) if isinstance(cfg_risk, dict) else {}
+    print(
+        "Risk exits: "
+        f"stop_atr_mult={cfg_risk.get('stop_atr_mult', None)} "
+        f"trail_stop_atr_mult={cfg_risk.get('trail_stop_atr_mult', None)} "
+        f"tp_atr_mult={cfg_risk.get('tp_atr_mult', None)}"
+    )
+    if isinstance(profiles, dict) and profiles:
+        for prof_name in ("trend", "range"):
+            if prof_name in profiles and isinstance(profiles.get(prof_name), dict):
+                p = profiles[prof_name]
+                print(
+                    f"Risk profile '{prof_name}': "
+                    f"stop_atr_mult={p.get('stop_atr_mult', 'inherit')} "
+                    f"trail_stop_atr_mult={p.get('trail_stop_atr_mult', 'inherit')} "
+                    f"tp_atr_mult={p.get('tp_atr_mult', 'inherit')}"
+                )
     print(f"Starting cash: {starting_cash:.2f}")
     print(f"Final equity:   {final_equity:.2f}")
     print(f"Total return:   {total_return*100:.2f}%")
     print(f"Max drawdown:   {max_drawdown*100:.2f}%")
     print(f"Trades (all):   {len(trades)} | Sells(closed): {len(sell_trades)}")
     if sell_trades:
+        exit_counts = {"TAKE_PROFIT hit": 0, "STOP_LOSS hit": 0, "BACKTEST: strategy SELL": 0, "BACKTEST: end close": 0, "other": 0}
+        for t in sell_trades:
+            reason = str(t.get("reason", "") or "")
+            if reason in exit_counts:
+                exit_counts[reason] += 1
+            else:
+                exit_counts["other"] += 1
+
+        print(
+            "Exit reasons: "
+            f"TP={exit_counts['TAKE_PROFIT hit']} "
+            f"SL={exit_counts['STOP_LOSS hit']} "
+            f"strategy={exit_counts['BACKTEST: strategy SELL']} "
+            f"end={exit_counts['BACKTEST: end close']} "
+            f"other={exit_counts['other']}"
+        )
+
+        # Per-position-profile breakdown (trend vs range)
+        prof_stats = {}
+        for t in sell_trades:
+            prof = str(t.get("position_profile", "") or "unknown")
+            realized = float(t.get("realized_pnl", 0.0) or 0.0)
+            s = prof_stats.setdefault(prof, {"n": 0, "wins": 0, "losses": 0, "realized": 0.0})
+            s["n"] += 1
+            s["realized"] += realized
+            if realized > 0:
+                s["wins"] += 1
+            elif realized < 0:
+                s["losses"] += 1
+
+        if prof_stats:
+            parts = []
+            for prof in sorted(prof_stats.keys()):
+                s = prof_stats[prof]
+                wr = (s["wins"] / s["n"] * 100.0) if s["n"] > 0 else 0.0
+                parts.append(f"{prof}: n={s['n']} win%={wr:.1f} realized={s['realized']:.2f}")
+            print("By profile: " + " | ".join(parts))
+
         print(
             f"Win rate:       {wins / len(sell_trades) * 100:.2f}% (wins={wins}, losses={losses})"
         )
