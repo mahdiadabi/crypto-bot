@@ -62,6 +62,8 @@ def regime_signal(
     range_rsi_sell_min = None if range_rsi_sell_min is None else float(range_rsi_sell_min)
     range_vwap_dist_atr_mult = float(cfg.get("range_vwap_dist_atr_mult", 1.2))
     range_max_entries_per_utc_day = int(cfg.get("range_max_entries_per_utc_day", 1))
+    range_require_close_above_ema = bool(cfg.get("range_require_close_above_ema", False))
+    range_require_ema_rising = bool(cfg.get("range_require_ema_rising", False))
 
     ema_col = f"ema_{ema_period}"
     adx_col = f"adx_{adx_period}"
@@ -179,6 +181,11 @@ def regime_signal(
     if enable_range and adx <= range_adx_max:
         if range_max_entries_per_utc_day > 0 and range_entries_today >= range_max_entries_per_utc_day:
             return Signal("HOLD", "range blocked: max entries reached for UTC day")
+
+        if range_require_close_above_ema and close <= ema:
+            return Signal("HOLD", "range blocked: close <= EMA (uptrend filter)")
+        if range_require_ema_rising and not ema_rising:
+            return Signal("HOLD", "range blocked: EMA not rising (uptrend filter)")
 
         bb_lower = float(curr[bb_lower_col])
         rsi = float(curr[rsi_col])

@@ -24,7 +24,7 @@
     "sell_requires_rsi": false,
 
     "regime": {
-      "enable_trend": true,
+      "enable_trend": false,
       "enable_range": true,
       "adx_period": 14,
       "ema_period": 200,
@@ -34,20 +34,20 @@
       "vwap_period": 96,
 
       "trend_adx_min": 30,
-      "range_adx_max": 18,
+      "range_adx_max": 20,
       "trend_require_close_above_ema": true,
       "trend_require_ema_rising": true,
       "trend_exit_on_close_below_ema": true,
       "trend_exit_on_donchian_low_break": false,
 
-      "range_rsi_buy_max": 35,
+      "range_rsi_buy_max": 37,
       "range_exit_on_vwap": true,
       "range_exit_vwap_buffer_atr_mult": 0,
       "range_exit_on_bb_mid": true,
       "range_exit_on_bb_upper": false,
       "range_rsi_sell_min": null,
-      "range_vwap_dist_atr_mult": 1.2,
-      "range_max_entries_per_utc_day": 1,
+      "range_vwap_dist_atr_mult": 0.8,
+      "range_max_entries_per_utc_day": 0,
 
       "trend_time_stop_bars": 192
     }
@@ -55,7 +55,7 @@
     
   "paper": {
     "starting_cash": 1000,
-    "fee_rate": 0.002
+    "fee_rate": 0.00175
   },
 
   "risk": {
@@ -78,7 +78,7 @@
 
     "profiles": {
       "trend": {
-        "stop_atr_mult": 1.8,
+        "stop_atr_mult": 2,
         "trail_stop_atr_mult": 3.0,
         "tp_atr_mult": null
       },
@@ -91,8 +91,8 @@
   },
 
   "backtest": {
-    "days": 30,
-    "warmup_candles": 50
+    "days": 60,
+    "warmup_candles": 60
   }
 
 

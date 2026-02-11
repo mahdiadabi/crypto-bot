@@ -20,6 +20,7 @@ offline backtest runner.
     - Enable/disable modules: `enable_trend`, `enable_range`
     - Trend exits (optional): `trend_exit_on_close_below_ema`, `trend_exit_on_donchian_low_break`
     - Range exits (optional): `range_exit_on_vwap`, `range_exit_vwap_buffer_atr_mult`, `range_exit_on_bb_mid`, `range_exit_on_bb_upper`, `range_rsi_sell_min`
+    - Range entry filters (optional): `range_require_close_above_ema`, `range_require_ema_rising`
 - Paper:
   - `paper.starting_cash`, `paper.fee_rate`
 - Risk (ATR-based stops):

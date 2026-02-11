@@ -432,6 +432,11 @@ def main():
             f"bb_upper={bool(cfg_regime.get('range_exit_on_bb_upper', False))} "
             f"rsi_sell_min={cfg_regime.get('range_rsi_sell_min', None)}"
         )
+        print(
+            "Range entry filters: "
+            f"close_above_ema={bool(cfg_regime.get('range_require_close_above_ema', False))} "
+            f"ema_rising={bool(cfg_regime.get('range_require_ema_rising', False))}"
+        )
     else:
         print(f"SMA: fast={sma_fast} slow={sma_slow} | RSI={rsi_period}")
 
