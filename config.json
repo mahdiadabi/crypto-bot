@@ -3,7 +3,7 @@
   "exchange": "lbank",
   "symbol": "ETH/USDT",
   "timeframe": "15m",
-  "loop_seconds": 3000,
+  "loop_seconds": 300,
 
   "use_api_keys": false,
   "api_key": "",
@@ -83,7 +83,7 @@
         "tp_atr_mult": null
       },
       "range": {
-        "stop_atr_mult": 1.5,
+        "stop_atr_mult": 2,
         "trail_stop_atr_mult": null,
         "tp_atr_mult": null
       }
