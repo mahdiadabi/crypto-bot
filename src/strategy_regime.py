@@ -57,6 +57,9 @@ def regime_signal(
     range_exit_on_vwap = bool(cfg.get("range_exit_on_vwap", True))
     range_exit_vwap_buffer_atr_mult = float(cfg.get("range_exit_vwap_buffer_atr_mult", 0.0) or 0.0)
     range_exit_on_bb_mid = bool(cfg.get("range_exit_on_bb_mid", False))
+    range_exit_bb_mid_buffer_atr_mult = float(
+        cfg.get("range_exit_bb_mid_buffer_atr_mult", 0.0) or 0.0
+    )
     range_exit_on_bb_upper = bool(cfg.get("range_exit_on_bb_upper", False))
     range_rsi_sell_min = cfg.get("range_rsi_sell_min", None)
     range_rsi_sell_min = None if range_rsi_sell_min is None else float(range_rsi_sell_min)
@@ -127,8 +130,17 @@ def regime_signal(
                 return Signal("SELL", f"range exit: close {close:.2f} >= BB_upper {bb_upper:.2f}")
             if range_rsi_sell_min is not None and rsi >= range_rsi_sell_min:
                 return Signal("SELL", f"range exit: RSI {rsi:.1f} >= {range_rsi_sell_min}")
-            if range_exit_on_bb_mid and close >= bb_mid:
-                return Signal("SELL", f"range exit: close {close:.2f} >= BB_mid {bb_mid:.2f}")
+            if range_exit_on_bb_mid:
+                bb_mid_target = bb_mid
+                if range_exit_bb_mid_buffer_atr_mult > 0 and atr > 0:
+                    bb_mid_target = bb_mid + atr * range_exit_bb_mid_buffer_atr_mult
+                if close >= bb_mid_target:
+                    if bb_mid_target == bb_mid:
+                        return Signal("SELL", f"range exit: close {close:.2f} >= BB_mid {bb_mid:.2f}")
+                    return Signal(
+                        "SELL",
+                        f"range exit: close {close:.2f} >= BB_mid {bb_mid:.2f} + {range_exit_bb_mid_buffer_atr_mult:.2f}*ATR",
+                    )
 
             if range_exit_on_vwap:
                 vwap_target = vwap

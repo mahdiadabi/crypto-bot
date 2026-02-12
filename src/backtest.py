@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -198,6 +199,9 @@ def main():
     day_start_utc = None
     day_start_equity = starting_cash
     last_range_entry_utc = None
+    signal_action_counts: Counter[str] = Counter()
+    hold_reason_counts: Counter[str] = Counter()
+    blocked_buy_reason_counts: Counter[str] = Counter()
 
     # Start after warmup so indicators are ready
     start_idx = warmup
@@ -310,6 +314,10 @@ def main():
                 ),
             )
 
+        signal_action_counts[str(sig.action)] += 1
+        if str(sig.action) == "HOLD":
+            hold_reason_counts[str(sig.reason)] += 1
+
         # 2.5) daily loss + drawdown controls (entries only)
         eq_pre = equity(state, price)
         if day_start_utc != utc_day:
@@ -328,11 +336,14 @@ def main():
         dd_stop_pct = cfg_risk.get("dd_stop_pct", None)
 
         entry_blocked = False
+        entry_block_reason = None
         size_mult = 1.0
         if daily_loss_limit is not None and daily_ret <= -float(daily_loss_limit):
             entry_blocked = True
+            entry_block_reason = "blocked: daily_loss_limit_pct"
         if dd_stop_pct is not None and dd >= float(dd_stop_pct):
             entry_blocked = True
+            entry_block_reason = "blocked: dd_stop_pct"
         elif dd_reduce_pct is not None and dd >= float(dd_reduce_pct):
             size_mult = max(min(dd_reduce_mult, 1.0), 0.0)
 
@@ -351,6 +362,7 @@ def main():
         )
 
         # 4) execute intent
+        opened_this_bar = False
         if intent.action == "OPEN_LONG":
             # Prevent immediate re-entry on the same candle after an exit (common churn pattern).
             if exited_this_bar:
@@ -374,21 +386,33 @@ def main():
                     if isinstance(trade, dict):
                         trade["time"] = _utc(ts)
                     trades.append(trade)
+                    opened_this_bar = True
                     if getattr(sig, "risk_profile", None) == "range":
                         last_range_entry_utc = utc_day
 
         elif intent.action == "CLOSE_LONG":
+            strategy_exit_reason = str(getattr(sig, "reason", "") or "strategy SELL")
             msg, trade = close_long(
                 state=state,
                 symbol=symbol,
                 amount=float(intent.amount),
                 price=price,
                 fee_rate=fee_rate,
-                reason="BACKTEST: strategy SELL",
+                reason=f"BACKTEST: {strategy_exit_reason}",
             )
             if isinstance(trade, dict):
                 trade["time"] = _utc(ts)
             trades.append(trade)
+
+        if sig.action == "BUY":
+            if intent.action != "OPEN_LONG":
+                blocked_buy_reason_counts[str(intent.reason)] += 1
+            elif exited_this_bar:
+                blocked_buy_reason_counts["blocked: same-candle reentry"] += 1
+            elif entry_blocked:
+                blocked_buy_reason_counts[str(entry_block_reason or "blocked: risk guard")] += 1
+            elif not opened_this_bar:
+                blocked_buy_reason_counts["blocked: amount <= 0 after caps"] += 1
 
         # 5) record equity curve + drawdown stats
         eq_post = equity(state, price)
@@ -442,7 +466,9 @@ def main():
         print(
             "Range exits: "
             f"vwap={bool(cfg_regime.get('range_exit_on_vwap', True))} "
+            f"vwap_buf_atr={float(cfg_regime.get('range_exit_vwap_buffer_atr_mult', 0.0) or 0.0):.2f} "
             f"bb_mid={bool(cfg_regime.get('range_exit_on_bb_mid', False))} "
+            f"bb_mid_buf_atr={float(cfg_regime.get('range_exit_bb_mid_buffer_atr_mult', 0.0) or 0.0):.2f} "
             f"bb_upper={bool(cfg_regime.get('range_exit_on_bb_upper', False))} "
             f"rsi_sell_min={cfg_regime.get('range_rsi_sell_min', None)}"
         )
@@ -475,13 +501,43 @@ def main():
     print(f"Final equity:   {final_equity:.2f}")
     print(f"Total return:   {total_return*100:.2f}%")
     print(f"Max drawdown:   {max_drawdown*100:.2f}%")
+    print(
+        "Signals: "
+        f"BUY={signal_action_counts.get('BUY', 0)} "
+        f"SELL={signal_action_counts.get('SELL', 0)} "
+        f"HOLD={signal_action_counts.get('HOLD', 0)}"
+    )
     print(f"Trades (all):   {len(trades)} | Sells(closed): {len(sell_trades)}")
+    if hold_reason_counts:
+        top_hold = hold_reason_counts.most_common(6)
+        print(
+            "Top HOLD reasons: "
+            + " | ".join(f"{reason}={count}" for reason, count in top_hold)
+        )
+    if blocked_buy_reason_counts:
+        print(
+            "Blocked BUY reasons: "
+            + " | ".join(
+                f"{reason}={count}"
+                for reason, count in blocked_buy_reason_counts.most_common(8)
+            )
+        )
     if sell_trades:
-        exit_counts = {"TAKE_PROFIT hit": 0, "STOP_LOSS hit": 0, "BACKTEST: strategy SELL": 0, "BACKTEST: end close": 0, "other": 0}
+        exit_counts = {
+            "TAKE_PROFIT hit": 0,
+            "STOP_LOSS hit": 0,
+            "strategy": 0,
+            "BACKTEST: end close": 0,
+            "other": 0,
+        }
+        strategy_exit_details: Counter[str] = Counter()
         for t in sell_trades:
             reason = str(t.get("reason", "") or "")
-            if reason in exit_counts:
+            if reason in ("TAKE_PROFIT hit", "STOP_LOSS hit", "BACKTEST: end close"):
                 exit_counts[reason] += 1
+            elif reason.startswith("BACKTEST:"):
+                exit_counts["strategy"] += 1
+                strategy_exit_details[reason] += 1
             else:
                 exit_counts["other"] += 1
 
@@ -489,10 +545,18 @@ def main():
             "Exit reasons: "
             f"TP={exit_counts['TAKE_PROFIT hit']} "
             f"SL={exit_counts['STOP_LOSS hit']} "
-            f"strategy={exit_counts['BACKTEST: strategy SELL']} "
+            f"strategy={exit_counts['strategy']} "
             f"end={exit_counts['BACKTEST: end close']} "
             f"other={exit_counts['other']}"
         )
+        if strategy_exit_details:
+            print(
+                "Strategy exit details: "
+                + " | ".join(
+                    f"{reason.replace('BACKTEST: ', '', 1)}={count}"
+                    for reason, count in strategy_exit_details.most_common(8)
+                )
+            )
 
         # Per-position-profile breakdown (trend vs range)
         prof_stats = {}
