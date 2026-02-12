@@ -92,6 +92,7 @@ def main():
     bt_cfg = cfg.get("backtest", {"days": 30, "warmup_candles": 50})
     days = int(bt_cfg.get("days", 30))
     warmup = int(bt_cfg.get("warmup_candles", 50))
+    print_candle_range = bool(bt_cfg.get("print_candle_range", True))
     if strategy_name == "regime":
         ema_period = int(cfg_regime.get("ema_period", 200))
         adx_period = int(cfg_regime.get("adx_period", 14))
@@ -162,6 +163,13 @@ def main():
         )
 
     df = ohlcv_to_df(all_ohlcv)
+    if print_candle_range and len(df) > 0:
+        first_ts = df.index[0]
+        last_ts = df.index[-1]
+        print(f"Requested window: since={_utc(since)} | now={_utc(now)}")
+        print(
+            f"Fetched candles: n={len(df)} | first={_utc(first_ts)} | last={_utc(last_ts)}"
+        )
     if strategy_name == "regime":
         ema_period = int(cfg_regime.get("ema_period", 200))
         adx_period = int(cfg_regime.get("adx_period", 14))
@@ -193,6 +201,12 @@ def main():
 
     # Start after warmup so indicators are ready
     start_idx = warmup
+    if print_candle_range and len(df) > 0 and 0 <= start_idx < len(df):
+        trade_first_ts = df.index[start_idx]
+        trade_last_ts = df.index[-1]
+        print(
+            f"Trade window (after warmup): first={_utc(trade_first_ts)} | last={_utc(trade_last_ts)}"
+        )
     trades = []
 
     for i in range(start_idx, len(df)):

@@ -3,7 +3,7 @@
   "exchange": "lbank",
   "symbol": "ETH/USDT",
   "timeframe": "15m",
-  "loop_seconds": 60,
+  "loop_seconds": 3000,
 
   "use_api_keys": false,
   "api_key": "",
@@ -41,12 +41,12 @@
       "trend_exit_on_donchian_low_break": false,
 
       "range_rsi_buy_max": 37,
-      "range_exit_on_vwap": true,
+      "range_exit_on_vwap": false,
       "range_exit_vwap_buffer_atr_mult": 0,
       "range_exit_on_bb_mid": true,
       "range_exit_on_bb_upper": false,
       "range_rsi_sell_min": null,
-      "range_vwap_dist_atr_mult": 0.8,
+      "range_vwap_dist_atr_mult": 1.8,
       "range_max_entries_per_utc_day": 0,
 
       "trend_time_stop_bars": 192
@@ -83,7 +83,7 @@
         "tp_atr_mult": null
       },
       "range": {
-        "stop_atr_mult": 1.2,
+        "stop_atr_mult": 1.5,
         "trail_stop_atr_mult": null,
         "tp_atr_mult": null
       }
@@ -92,7 +92,7 @@
 
   "backtest": {
     "days": 60,
-    "warmup_candles": 60
+    "warmup_candles": 100
   }
 
 
