@@ -27,14 +27,14 @@
       "enable_trend": false,
       "enable_range": true,
       "adx_period": 14,
-      "ema_period": 200,
+      "ema_period":200,
       "donchian_lookback": 96,
       "bb_period": 20,
       "bb_std": 2.0,
       "vwap_period": 96,
 
       "trend_adx_min": 30,
-      "range_adx_max": 19,
+      "range_adx_max": 20,
       "trend_require_close_above_ema": true,
       "trend_require_ema_rising": true,
       "trend_exit_on_close_below_ema": true,
@@ -44,9 +44,13 @@
       "range_exit_on_vwap": false,
       "range_exit_vwap_buffer_atr_mult": 0,
       "range_exit_on_bb_mid": true,
-      "range_exit_bb_mid_buffer_atr_mult": 0.10,
+      "range_exit_bb_mid_buffer_atr_mult": 0.1,
       "range_exit_on_bb_upper": false,
       "range_rsi_sell_min": null,
+      "range_entry_use_wick_low": false,
+      "range_exit_use_wick_high": false,
+      "range_entry_require_reclaim_bb_lower": false,
+      "range_entry_require_rsi_rising": false,
       "range_vwap_dist_atr_mult": 1.5,
       "range_max_entries_per_utc_day": 0,
 
@@ -92,8 +96,9 @@
   },
 
   "backtest": {
-    "days": 60,
-    "warmup_candles": 100
+    "days": 30,
+    "warmup_candles": 50,
+    "end_utc": "2026-02-14T13:15:00+00"
   }
 
 

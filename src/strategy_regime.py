@@ -67,6 +67,12 @@ def regime_signal(
     range_max_entries_per_utc_day = int(cfg.get("range_max_entries_per_utc_day", 1))
     range_require_close_above_ema = bool(cfg.get("range_require_close_above_ema", False))
     range_require_ema_rising = bool(cfg.get("range_require_ema_rising", False))
+    range_entry_use_wick_low = bool(cfg.get("range_entry_use_wick_low", False))
+    range_exit_use_wick_high = bool(cfg.get("range_exit_use_wick_high", False))
+    range_entry_require_reclaim_bb_lower = bool(
+        cfg.get("range_entry_require_reclaim_bb_lower", False)
+    )
+    range_entry_require_rsi_rising = bool(cfg.get("range_entry_require_rsi_rising", False))
 
     ema_col = f"ema_{ema_period}"
     adx_col = f"adx_{adx_period}"
@@ -114,6 +120,8 @@ def regime_signal(
             return Signal("HOLD", "indicator not ready")
 
     close = float(curr["close"])
+    high = float(curr["high"])
+    low = float(curr["low"])
     adx = float(curr[adx_col])
     ema = float(curr[ema_col])
     ema_prev = float(prev[ema_col])
@@ -125,36 +133,44 @@ def regime_signal(
             bb_upper = float(curr[bb_upper_col])
             rsi = float(curr[rsi_col])
             atr = float(curr[atr_col])
+            exit_ref = high if range_exit_use_wick_high else close
+            exit_ref_name = "high" if range_exit_use_wick_high else "close"
 
-            if range_exit_on_bb_upper and close >= bb_upper:
-                return Signal("SELL", f"range exit: close {close:.2f} >= BB_upper {bb_upper:.2f}")
+            if range_exit_on_bb_upper and exit_ref >= bb_upper:
+                return Signal(
+                    "SELL",
+                    f"range exit: {exit_ref_name} {exit_ref:.2f} >= BB_upper {bb_upper:.2f}",
+                )
             if range_rsi_sell_min is not None and rsi >= range_rsi_sell_min:
                 return Signal("SELL", f"range exit: RSI {rsi:.1f} >= {range_rsi_sell_min}")
             if range_exit_on_bb_mid:
                 bb_mid_target = bb_mid
                 if range_exit_bb_mid_buffer_atr_mult > 0 and atr > 0:
                     bb_mid_target = bb_mid + atr * range_exit_bb_mid_buffer_atr_mult
-                if close >= bb_mid_target:
+                if exit_ref >= bb_mid_target:
                     if bb_mid_target == bb_mid:
-                        return Signal("SELL", f"range exit: close {close:.2f} >= BB_mid {bb_mid:.2f}")
+                        return Signal(
+                            "SELL",
+                            f"range exit: {exit_ref_name} {exit_ref:.2f} >= BB_mid {bb_mid:.2f}",
+                        )
                     return Signal(
                         "SELL",
-                        f"range exit: close {close:.2f} >= BB_mid {bb_mid:.2f} + {range_exit_bb_mid_buffer_atr_mult:.2f}*ATR",
+                        f"range exit: {exit_ref_name} {exit_ref:.2f} >= BB_mid {bb_mid:.2f} + {range_exit_bb_mid_buffer_atr_mult:.2f}*ATR",
                     )
 
             if range_exit_on_vwap:
                 vwap_target = vwap
                 if range_exit_vwap_buffer_atr_mult > 0 and atr > 0:
                     vwap_target = vwap + atr * range_exit_vwap_buffer_atr_mult
-                if close >= vwap_target:
+                if exit_ref >= vwap_target:
                     if vwap_target == vwap:
                         return Signal(
                             "SELL",
-                            f"range exit: close {close:.2f} >= VWAP {vwap:.2f}",
+                            f"range exit: {exit_ref_name} {exit_ref:.2f} >= VWAP {vwap:.2f}",
                         )
                     return Signal(
                         "SELL",
-                        f"range exit: close {close:.2f} >= VWAP {vwap:.2f} + {range_exit_vwap_buffer_atr_mult:.2f}*ATR",
+                        f"range exit: {exit_ref_name} {exit_ref:.2f} >= VWAP {vwap:.2f} + {range_exit_vwap_buffer_atr_mult:.2f}*ATR",
                     )
 
             return Signal("HOLD", "range hold")
@@ -201,14 +217,24 @@ def regime_signal(
 
         bb_lower = float(curr[bb_lower_col])
         rsi = float(curr[rsi_col])
+        prev_rsi = float(prev[rsi_col])
         atr = float(curr[atr_col])
         vwap = float(curr[vwap_col])
+        entry_ref = low if range_entry_use_wick_low else close
+        entry_ref_name = "low" if range_entry_use_wick_low else "close"
+        # Reclaim mode means "wick touched below BB lower, then candle reclaimed above it".
+        touch_ref = low if range_entry_require_reclaim_bb_lower else entry_ref
 
-        vwap_far = abs(close - vwap) >= (atr * range_vwap_dist_atr_mult)
-        if close < bb_lower and rsi <= range_rsi_buy_max and vwap_far:
+        vwap_far = abs(touch_ref - vwap) >= (atr * range_vwap_dist_atr_mult)
+        touches_lower = touch_ref < bb_lower
+        if touches_lower and range_entry_require_reclaim_bb_lower and close <= bb_lower:
+            return Signal("HOLD", "range blocked: no reclaim above BB_lower")
+        if touches_lower and range_entry_require_rsi_rising and rsi <= prev_rsi:
+            return Signal("HOLD", "range blocked: RSI not rising")
+        if touches_lower and rsi <= range_rsi_buy_max and vwap_far:
             return Signal(
                 "BUY",
-                f"range fade: close {close:.2f} < BB_lower {bb_lower:.2f} | RSI {rsi:.1f} <= {range_rsi_buy_max} | far from VWAP",
+                f"range fade: {entry_ref_name} {entry_ref:.2f} < BB_lower {bb_lower:.2f} | RSI {rsi:.1f} <= {range_rsi_buy_max} | far from VWAP",
                 risk_profile="range",
             )
         return Signal("HOLD", "range regime but no setup")

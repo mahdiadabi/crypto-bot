@@ -20,6 +20,8 @@ offline backtest runner.
     - Enable/disable modules: `enable_trend`, `enable_range`
     - Trend exits (optional): `trend_exit_on_close_below_ema`, `trend_exit_on_donchian_low_break`
     - Range exits (optional): `range_exit_on_vwap`, `range_exit_vwap_buffer_atr_mult`, `range_exit_on_bb_mid`, `range_exit_on_bb_upper`, `range_rsi_sell_min`
+    - Optional wick-based detection: `range_entry_use_wick_low`, `range_exit_use_wick_high`
+    - Optional entry confirmation: `range_entry_require_reclaim_bb_lower`, `range_entry_require_rsi_rising`
     - Range entry filters (optional): `range_require_close_above_ema`, `range_require_ema_rising`
 - Paper:
   - `paper.starting_cash`, `paper.fee_rate`
@@ -31,6 +33,7 @@ offline backtest runner.
   - Optional per-regime overrides: `risk.profiles.trend.*`, `risk.profiles.range.*`
 - Backtest:
   - `backtest.days`, `backtest.warmup_candles`
+  - Optional deterministic end: `backtest.end_utc` (ISO8601, e.g. `2026-02-14T13:15:00+00:00`)
 
 ## Run live (paper)
 ```

@@ -18,8 +18,7 @@ from src.market_data import (
     add_donchian,
     add_vwap,
 )
-from src.strategy_sma_rsi import sma_crossover_with_rsi
-from src.strategy_regime import regime_signal, Signal as RegimeSignal
+from src.strategy_runner import compute_signal
 from src.risk import risk_decision
 from src.paper_engine import (
     PaperState,
@@ -138,7 +137,11 @@ def main():
             f"Donchian={int(cfg_regime.get('donchian_lookback', 96))} "
             f"BB={int(cfg_regime.get('bb_period', 20))} "
             f"VWAP={int(cfg_regime.get('vwap_period', 96))} "
-            f"| modules: trend={bool(cfg_regime.get('enable_trend', True))} range={bool(cfg_regime.get('enable_range', True))}"
+            f"| modules: trend={bool(cfg_regime.get('enable_trend', True))} range={bool(cfg_regime.get('enable_range', True))} "
+            f"| wick_entry_low={bool(cfg_regime.get('range_entry_use_wick_low', False))} "
+            f"wick_exit_high={bool(cfg_regime.get('range_exit_use_wick_high', False))} "
+            f"reclaim={bool(cfg_regime.get('range_entry_require_reclaim_bb_lower', False))} "
+            f"rsi_rising={bool(cfg_regime.get('range_entry_require_rsi_rising', False))}"
         )
     else:
         log(
@@ -235,41 +238,23 @@ def main():
                 exited_this_bar = True
 
             # 3) Strategy signal
-            if strategy_name == "regime":
-                # Trend time-stop (risk control)
-                time_stop_bars = int(cfg_regime.get("trend_time_stop_bars", 0) or 0)
-                if (
-                    state.in_position
-                    and state.position_profile == "trend"
-                    and time_stop_bars > 0
-                    and int(getattr(state, "bars_in_position", 0) or 0) >= time_stop_bars
-                ):
-                    sig = RegimeSignal("SELL", f"time stop: bars_in_position >= {time_stop_bars}")
-                else:
-                    entries_today = 1 if getattr(state, "last_range_entry_utc_date", None) == utc_day else 0
-                    sig = regime_signal(
-                        df,
-                        rsi_period=rsi_period,
-                        atr_period=atr_period,
-                        cfg=cfg_regime,
-                        in_position=state.in_position,
-                        position_profile=state.position_profile,
-                        range_entries_today=entries_today,
-                    )
-            else:
-                sig = sma_crossover_with_rsi(
-                    df,
-                    sma_fast,
-                    sma_slow,
-                    rsi_period,
-                    rsi_buy_min,
-                    rsi_sell_max,
-                    require_price_above_slow=bool(
-                        cfg_strategy.get("require_price_above_slow", True)
-                    ),
-                    require_slow_rising=bool(cfg_strategy.get("require_slow_rising", True)),
-                    sell_requires_rsi=bool(cfg_strategy.get("sell_requires_rsi", False)),
-                )
+            sig = compute_signal(
+                df,
+                strategy_name=strategy_name,
+                cfg_strategy=cfg_strategy,
+                cfg_regime=cfg_regime,
+                sma_fast=sma_fast,
+                sma_slow=sma_slow,
+                rsi_period=rsi_period,
+                rsi_buy_min=rsi_buy_min,
+                rsi_sell_max=rsi_sell_max,
+                atr_period=atr_period,
+                in_position=state.in_position,
+                position_profile=state.position_profile,
+                bars_in_position=int(getattr(state, "bars_in_position", 0) or 0),
+                utc_day=utc_day,
+                last_range_entry_utc_date=getattr(state, "last_range_entry_utc_date", None),
+            )
 
             if sig.action in ("BUY", "SELL"):
                 log(f"{time_idx} | SIGNAL: {sig.action} | {sig.reason}")
@@ -361,7 +346,7 @@ def main():
                     amount=float(intent.amount),
                     price=price,
                     fee_rate=fee_rate,
-                    reason=intent.reason,
+                    reason=str(getattr(sig, "reason", "") or intent.reason),
                 )
                 state_dirty = True
 

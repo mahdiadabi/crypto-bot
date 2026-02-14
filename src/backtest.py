@@ -28,9 +28,7 @@ from src.paper_engine import (
     update_trailing_stop_atr_highest,
 )
 from src.risk import risk_decision
-from src.strategy_sma_crossover import sma_crossover_signal
-from src.strategy_sma_rsi import sma_crossover_with_rsi
-from src.strategy_regime import regime_signal, Signal as RegimeSignal
+from src.strategy_runner import compute_signal
 
 
 def load_config() -> dict:
@@ -47,6 +45,21 @@ def _utc(ts) -> str:
     if hasattr(ts, "isoformat"):
         return ts.isoformat()
     return str(ts)
+
+
+def _parse_end_utc(raw_end_utc) -> datetime:
+    if raw_end_utc is None:
+        return datetime.now(timezone.utc)
+    if not isinstance(raw_end_utc, str) or not raw_end_utc.strip():
+        raise ValueError("backtest.end_utc must be an ISO8601 string when provided.")
+
+    txt = raw_end_utc.strip()
+    if txt.endswith("Z"):
+        txt = txt[:-1] + "+00:00"
+    dt = datetime.fromisoformat(txt)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def timeframe_to_minutes(tf: str) -> int:
@@ -75,6 +88,8 @@ def main():
     sma_fast = int(cfg.get("sma_fast", 10))
     sma_slow = int(cfg.get("sma_slow", 30))
     rsi_period = int(cfg.get("rsi_period", 14))
+    rsi_buy_min = float(cfg.get("rsi_buy_min", 55))
+    rsi_sell_max = float(cfg.get("rsi_sell_max", 45))
 
     cfg_paper = cfg.get("paper", {"starting_cash": 1000, "fee_rate": 0.0})
     cfg_risk = cfg.get("risk", {"trade_pct_equity": 0.1, "one_position_only": True})
@@ -93,6 +108,7 @@ def main():
     bt_cfg = cfg.get("backtest", {"days": 30, "warmup_candles": 50})
     days = int(bt_cfg.get("days", 30))
     warmup = int(bt_cfg.get("warmup_candles", 50))
+    end_utc = _parse_end_utc(bt_cfg.get("end_utc", None))
     print_candle_range = bool(bt_cfg.get("print_candle_range", True))
     if strategy_name == "regime":
         ema_period = int(cfg_regime.get("ema_period", 200))
@@ -132,9 +148,9 @@ def main():
 
     # Many exchanges limit fetch_ohlcv to 500–1500 candles per call.
     # We'll do simple pagination using "since" in ms.
-    now = datetime.now(timezone.utc)
-    since = now - timedelta(days=days) - timedelta(minutes=minutes * warmup)
+    since = end_utc - timedelta(days=days) - timedelta(minutes=minutes * warmup)
     since_ms = int(since.timestamp() * 1000)
+    end_ms = int(end_utc.timestamp() * 1000)
 
     all_ohlcv = []
     max_batch = 1000  # safe default
@@ -142,6 +158,11 @@ def main():
         batch = ex.fetch_ohlcv(
             symbol, timeframe=timeframe, since=since_ms, limit=max_batch
         )
+        if not batch:
+            break
+
+        # Deterministic run end: ignore candles that start after configured end_utc.
+        batch = [c for c in batch if int(c[0]) <= end_ms]
         if not batch:
             break
 
@@ -158,16 +179,24 @@ def main():
         if len(batch) < max_batch:
             break
 
-    if len(all_ohlcv) < (warmup + 5):
+    df = ohlcv_to_df(all_ohlcv)
+    if len(df) > 0:
+        df = df[df.index <= end_utc]
+    if len(df) > 0:
+        last_open = df.index[-1].to_pydatetime()
+        if last_open + timedelta(minutes=minutes) > end_utc:
+            df = df.iloc[:-1]
+
+    if len(df) < (warmup + 5):
         raise RuntimeError(
-            f"Not enough candles fetched: {len(all_ohlcv)}. Try fewer days or smaller timeframe."
+            f"Not enough candles after end_utc/open-candle filtering: {len(df)}. "
+            "Try increasing days or using an earlier end_utc."
         )
 
-    df = ohlcv_to_df(all_ohlcv)
     if print_candle_range and len(df) > 0:
         first_ts = df.index[0]
         last_ts = df.index[-1]
-        print(f"Requested window: since={_utc(since)} | now={_utc(now)}")
+        print(f"Requested window: since={_utc(since)} | end={_utc(end_utc)}")
         print(
             f"Fetched candles: n={len(df)} | first={_utc(first_ts)} | last={_utc(last_ts)}"
         )
@@ -272,47 +301,23 @@ def main():
             exited_this_bar = True
 
         # 2) signal from strategy
-        if strategy_name == "regime":
-            time_stop_bars = int(cfg_regime.get("trend_time_stop_bars", 0) or 0)
-            if (
-                state.in_position
-                and state.position_profile == "trend"
-                and time_stop_bars > 0
-                and int(getattr(state, "bars_in_position", 0) or 0) >= time_stop_bars
-            ):
-                sig = RegimeSignal(
-                    "SELL", f"time stop: bars_in_position >= {time_stop_bars}"
-                )
-            else:
-                entries_today = 1 if last_range_entry_utc == utc_day else 0
-                sig = regime_signal(
-                    window,
-                    rsi_period=rsi_period,
-                    atr_period=atr_period,
-                    cfg=cfg_regime,
-                    in_position=state.in_position,
-                    position_profile=state.position_profile,
-                    range_entries_today=entries_today,
-                )
-        else:
-            # sig = sma_crossover_signal(window, sma_fast, sma_slow)
-            sig = sma_crossover_with_rsi(
-                window,
-                sma_fast,
-                sma_slow,
-                rsi_period,
-                cfg["rsi_buy_min"],
-                cfg["rsi_sell_max"],
-                require_price_above_slow=bool(
-                    cfg.get("strategy", {}).get("require_price_above_slow", True)
-                ),
-                require_slow_rising=bool(
-                    cfg.get("strategy", {}).get("require_slow_rising", True)
-                ),
-                sell_requires_rsi=bool(
-                    cfg.get("strategy", {}).get("sell_requires_rsi", False)
-                ),
-            )
+        sig = compute_signal(
+            window,
+            strategy_name=strategy_name,
+            cfg_strategy=cfg_strategy,
+            cfg_regime=cfg_regime,
+            sma_fast=sma_fast,
+            sma_slow=sma_slow,
+            rsi_period=rsi_period,
+            rsi_buy_min=rsi_buy_min,
+            rsi_sell_max=rsi_sell_max,
+            atr_period=atr_period,
+            in_position=state.in_position,
+            position_profile=state.position_profile,
+            bars_in_position=int(getattr(state, "bars_in_position", 0) or 0),
+            utc_day=utc_day,
+            last_range_entry_utc_date=last_range_entry_utc,
+        )
 
         signal_action_counts[str(sig.action)] += 1
         if str(sig.action) == "HOLD":
@@ -454,7 +459,7 @@ def main():
     losses = sum(1 for x in realized_list if x < 0)
 
     print("\n=== BACKTEST SUMMARY ===")
-    print(f"Symbol: {symbol} | Timeframe: {timeframe} | Days: {days}")
+    print(f"Symbol: {symbol} | Timeframe: {timeframe} | Days: {days} | End={_utc(end_utc)}")
     print(f"Strategy: {strategy_name}")
     if strategy_name == "regime":
         print(
@@ -470,12 +475,16 @@ def main():
             f"bb_mid={bool(cfg_regime.get('range_exit_on_bb_mid', False))} "
             f"bb_mid_buf_atr={float(cfg_regime.get('range_exit_bb_mid_buffer_atr_mult', 0.0) or 0.0):.2f} "
             f"bb_upper={bool(cfg_regime.get('range_exit_on_bb_upper', False))} "
-            f"rsi_sell_min={cfg_regime.get('range_rsi_sell_min', None)}"
+            f"rsi_sell_min={cfg_regime.get('range_rsi_sell_min', None)} "
+            f"wick_high={bool(cfg_regime.get('range_exit_use_wick_high', False))}"
         )
         print(
             "Range entry filters: "
             f"close_above_ema={bool(cfg_regime.get('range_require_close_above_ema', False))} "
-            f"ema_rising={bool(cfg_regime.get('range_require_ema_rising', False))}"
+            f"ema_rising={bool(cfg_regime.get('range_require_ema_rising', False))} "
+            f"wick_low={bool(cfg_regime.get('range_entry_use_wick_low', False))} "
+            f"reclaim_bb_lower={bool(cfg_regime.get('range_entry_require_reclaim_bb_lower', False))} "
+            f"rsi_rising={bool(cfg_regime.get('range_entry_require_rsi_rising', False))}"
         )
     else:
         print(f"SMA: fast={sma_fast} slow={sma_slow} | RSI={rsi_period}")
